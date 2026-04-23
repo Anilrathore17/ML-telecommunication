@@ -1,0 +1,21 @@
+{
+  "name": "telecom_v2",
+  "version": "1.0.0",
+  "description": "��#\u0000 \u0000M\u0000L\u0000-\u0000t\u0000e\u0000l\u0000e\u0000c\u0000o\u0000m\u0000m\u0000u\u0000n\u0000i\u0000c\u0000a\u0000t\u0000i\u0000o\u0000n\u0000\r\u0000 \u0000",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Anilrathore17/ML-telecommunication.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Anilrathore17/ML-telecommunication/issues"
+  },
+  "homepage": "https://github.com/Anilrathore17/ML-telecommunication#readme"
+}

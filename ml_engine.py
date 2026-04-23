@@ -19,7 +19,7 @@ Algorithms:
     • Z-Score baseline
 """
 
-import os, pickle, warnings
+import os, pickle, warnings, json
 import numpy as np
 import pandas as pd
 warnings.filterwarnings('ignore')
@@ -43,6 +43,7 @@ DATA_RAW   = os.path.join(BASE, 'data', 'telecom_dataset.csv')
 DATA_RICH  = os.path.join(BASE, 'data', 'telecom_enriched.csv')
 MODEL_DIR  = os.path.join(BASE, 'models')
 PIPELINE_ARTIFACTS = os.path.join(MODEL_DIR, 'pipeline_artifacts.pkl')
+PIPELINE_ARTIFACTS_JSON = os.path.join(MODEL_DIR, 'pipeline_artifacts.json')
 os.makedirs(os.path.join(BASE,'data'),  exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
 
@@ -58,7 +59,7 @@ def _required_artifact_paths():
     # Keep in sync with what training saves + what inference loads.
     return [
         DATA_RICH,
-        PIPELINE_ARTIFACTS,
+        PIPELINE_ARTIFACTS_JSON,
         os.path.join(MODEL_DIR, 'net_reg.pkl'),
         os.path.join(MODEL_DIR, 'net_km.pkl'),
         os.path.join(MODEL_DIR, 'net_scaler.pkl'),
@@ -89,6 +90,14 @@ def _to_jsonable(x):
     return x
 
 
+def _df_to_records(df: pd.DataFrame):
+    return df.to_dict(orient='records')
+
+
+def _records_to_df(records):
+    return pd.DataFrame.from_records(records) if records is not None else pd.DataFrame()
+
+
 def _strip_training_objects(r1: dict, r2: dict, r3: dict):
     """Remove large/non-essential objects so artifacts are stable and lightweight."""
     r1 = dict(r1)
@@ -108,24 +117,28 @@ def _strip_training_objects(r1: dict, r2: dict, r3: dict):
     r1['reg_res'] = reg_res
     r1.pop('km_zone', None)
     r1.pop('df', None)
+    if 'hourly_df' in r1 and isinstance(r1['hourly_df'], pd.DataFrame):
+        r1['hourly_df'] = _df_to_records(r1['hourly_df'])
 
     # r2: drop model objects
     r2.pop('churn_rf', None)
     r2.pop('km_user', None)
     r2.pop('df', None)
     if 'seg_summary' in r2:
-        r2['seg_summary'] = r2['seg_summary'].copy()
+        r2['seg_summary'] = _df_to_records(r2['seg_summary'])
     if 'peak_usage' in r2:
-        r2['peak_usage'] = r2['peak_usage'].copy()
+        r2['peak_usage'] = _df_to_records(r2['peak_usage'])
 
     # r3: drop model objects
     r3.pop('iso', None)
     r3.pop('ocsvm', None)
     r3.pop('df', None)
-    if 'profile' in r3 and hasattr(r3['profile'], 'copy'):
-        r3['profile'] = r3['profile'].copy()
-    if 'alerts' in r3 and hasattr(r3['alerts'], 'copy'):
-        r3['alerts'] = r3['alerts'].copy()
+    if 'profile' in r3 and isinstance(r3['profile'], (pd.DataFrame, pd.Series)):
+        # profile is a DataFrame indexed by label; store as records plus index column
+        prof = r3['profile'].reset_index().rename(columns={'index': 'Label'})
+        r3['profile'] = _df_to_records(prof)
+    if 'alerts' in r3 and isinstance(r3['alerts'], pd.DataFrame):
+        r3['alerts'] = _df_to_records(r3['alerts'])
     if 'ae_errors' in r3:
         r3['ae_errors'] = _to_jsonable(r3['ae_errors'])
 
@@ -137,8 +150,29 @@ def load_artifacts():
     if not artifacts_available():
         raise FileNotFoundError("Required artifacts are missing.")
     df = pd.read_csv(DATA_RICH)
-    art = pickle.load(open(PIPELINE_ARTIFACTS, 'rb'))
-    return df, art['r1'], art['r2'], art['r3']
+    with open(PIPELINE_ARTIFACTS_JSON, 'r', encoding='utf-8') as f:
+        art = json.load(f)
+
+    r1 = art['r1']
+    r2 = art['r2']
+    r3 = art['r3']
+
+    # Restore DataFrames that app.py expects
+    if isinstance(r1.get('hourly_df'), list):
+        r1['hourly_df'] = _records_to_df(r1['hourly_df'])
+    if isinstance(r2.get('seg_summary'), list):
+        r2['seg_summary'] = _records_to_df(r2['seg_summary'])
+    if isinstance(r2.get('peak_usage'), list):
+        r2['peak_usage'] = _records_to_df(r2['peak_usage'])
+    if isinstance(r3.get('alerts'), list):
+        r3['alerts'] = _records_to_df(r3['alerts'])
+    if isinstance(r3.get('profile'), list):
+        prof_df = _records_to_df(r3['profile'])
+        if 'Label' in prof_df.columns:
+            prof_df = prof_df.set_index('Label')
+        r3['profile'] = prof_df
+
+    return df, r1, r2, r3
 
 
 def train_and_save_artifacts(n=5000, force=False):
@@ -149,7 +183,8 @@ def train_and_save_artifacts(n=5000, force=False):
 
     # Save lightweight UI artifacts
     r1_s, r2_s, r3_s = _strip_training_objects(r1, r2, r3)
-    pickle.dump({'r1': r1_s, 'r2': r2_s, 'r3': r3_s}, open(PIPELINE_ARTIFACTS, 'wb'))
+    with open(PIPELINE_ARTIFACTS_JSON, 'w', encoding='utf-8') as f:
+        json.dump({'r1': r1_s, 'r2': r2_s, 'r3': r3_s}, f)
     return df, r1_s, r2_s, r3_s
 
 

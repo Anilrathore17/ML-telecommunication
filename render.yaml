@@ -1,7 +1,7 @@
 services:
   - type: web
     name: telecom-v2
-    env: python
+    runtime: python
     buildCommand: python -m pip install --upgrade pip setuptools wheel && python -m pip install -r requirements.txt
     startCommand: python -m streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
     envVars:

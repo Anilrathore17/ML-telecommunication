@@ -142,8 +142,9 @@ SEG_C = {
 # ── Load pipeline ─────────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
 def load_pipeline():
-    from ml_engine import run_pipeline
-    return run_pipeline(n=5000, force=False)
+    from ml_engine import get_pipeline
+    force = bool(st.session_state.pop('force_retrain', False))
+    return get_pipeline(n=5000, force=force)
 
 # ── Sidebar ───────────────────────────────────────────────────
 with st.sidebar:
@@ -168,7 +169,9 @@ with st.sidebar:
     tenure_r = st.slider("Tenure (months)", 1, 60, (1,60))
     st.markdown("---")
     if st.button("🔄  Retrain All Models"):
-        st.cache_resource.clear(); st.rerun()
+        st.cache_resource.clear()
+        st.session_state['force_retrain'] = True
+        st.rerun()
     st.markdown("---")
     st.markdown("""<div style='font-size:10px;color:#2C4A6E;text-align:center;'>
     ML Project · B.Tech 2025–26<br>Python · Scikit-learn · TF/Keras<br>Streamlit · Plotly</div>""",

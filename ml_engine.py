@@ -42,8 +42,124 @@ BASE       = os.path.dirname(os.path.abspath(__file__))
 DATA_RAW   = os.path.join(BASE, 'data', 'telecom_dataset.csv')
 DATA_RICH  = os.path.join(BASE, 'data', 'telecom_enriched.csv')
 MODEL_DIR  = os.path.join(BASE, 'models')
+PIPELINE_ARTIFACTS = os.path.join(MODEL_DIR, 'pipeline_artifacts.pkl')
 os.makedirs(os.path.join(BASE,'data'),  exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
+
+
+def _file_exists(path: str) -> bool:
+    try:
+        return os.path.exists(path) and os.path.getsize(path) > 0
+    except OSError:
+        return False
+
+
+def _required_artifact_paths():
+    # Keep in sync with what training saves + what inference loads.
+    return [
+        DATA_RICH,
+        PIPELINE_ARTIFACTS,
+        os.path.join(MODEL_DIR, 'net_reg.pkl'),
+        os.path.join(MODEL_DIR, 'net_km.pkl'),
+        os.path.join(MODEL_DIR, 'net_scaler.pkl'),
+        os.path.join(MODEL_DIR, 'churn_rf.pkl'),
+        os.path.join(MODEL_DIR, 'user_km.pkl'),
+        os.path.join(MODEL_DIR, 'beh_sc.pkl'),
+        os.path.join(MODEL_DIR, 'iso.pkl'),
+        os.path.join(MODEL_DIR, 'ocsvm.pkl'),
+        os.path.join(MODEL_DIR, 'an_sc.pkl'),
+        os.path.join(MODEL_DIR, 'autoencoder.keras'),
+        os.path.join(MODEL_DIR, 'ae_threshold.pkl'),
+        os.path.join(MODEL_DIR, 'lstm_demand.keras'),
+        os.path.join(MODEL_DIR, 'lstm_scaler.pkl'),
+    ]
+
+
+def artifacts_available() -> bool:
+    return all(_file_exists(p) for p in _required_artifact_paths())
+
+
+def _to_jsonable(x):
+    if isinstance(x, np.ndarray):
+        return x.tolist()
+    if isinstance(x, (np.floating,)):
+        return float(x)
+    if isinstance(x, (np.integer,)):
+        return int(x)
+    return x
+
+
+def _strip_training_objects(r1: dict, r2: dict, r3: dict):
+    """Remove large/non-essential objects so artifacts are stable and lightweight."""
+    r1 = dict(r1)
+    r2 = dict(r2)
+    r3 = dict(r3)
+
+    # r1: drop model objects; keep metrics + predictions
+    reg_res = {}
+    for name, rd in r1.get('reg_res', {}).items():
+        reg_res[name] = {
+            'r2': _to_jsonable(rd.get('r2')),
+            'mae': _to_jsonable(rd.get('mae')),
+            'rmse': _to_jsonable(rd.get('rmse')),
+            'y_test': _to_jsonable(rd.get('y_test')),
+            'y_pred': _to_jsonable(rd.get('y_pred')),
+        }
+    r1['reg_res'] = reg_res
+    r1.pop('km_zone', None)
+    r1.pop('df', None)
+
+    # r2: drop model objects
+    r2.pop('churn_rf', None)
+    r2.pop('km_user', None)
+    r2.pop('df', None)
+    if 'seg_summary' in r2:
+        r2['seg_summary'] = r2['seg_summary'].copy()
+    if 'peak_usage' in r2:
+        r2['peak_usage'] = r2['peak_usage'].copy()
+
+    # r3: drop model objects
+    r3.pop('iso', None)
+    r3.pop('ocsvm', None)
+    r3.pop('df', None)
+    if 'profile' in r3 and hasattr(r3['profile'], 'copy'):
+        r3['profile'] = r3['profile'].copy()
+    if 'alerts' in r3 and hasattr(r3['alerts'], 'copy'):
+        r3['alerts'] = r3['alerts'].copy()
+    if 'ae_errors' in r3:
+        r3['ae_errors'] = _to_jsonable(r3['ae_errors'])
+
+    return r1, r2, r3
+
+
+def load_artifacts():
+    """Fast path for production: load enriched dataset + precomputed UI metrics."""
+    if not artifacts_available():
+        raise FileNotFoundError("Required artifacts are missing.")
+    df = pd.read_csv(DATA_RICH)
+    art = pickle.load(open(PIPELINE_ARTIFACTS, 'rb'))
+    return df, art['r1'], art['r2'], art['r3']
+
+
+def train_and_save_artifacts(n=5000, force=False):
+    df, r1, r2, r3 = _train_pipeline(n=n, force=force)
+
+    # Save enriched dataset
+    df.to_csv(DATA_RICH, index=False)
+
+    # Save lightweight UI artifacts
+    r1_s, r2_s, r3_s = _strip_training_objects(r1, r2, r3)
+    pickle.dump({'r1': r1_s, 'r2': r2_s, 'r3': r3_s}, open(PIPELINE_ARTIFACTS, 'wb'))
+    return df, r1_s, r2_s, r3_s
+
+
+def get_pipeline(n=5000, force=False):
+    """Main entry used by Streamlit: load artifacts if present, otherwise train."""
+    if not force and artifacts_available():
+        print("[0] Loading precomputed artifacts…")
+        return load_artifacts()
+    print("[0] Artifacts missing or force=True — training pipeline…")
+    return train_and_save_artifacts(n=n, force=True)
 
 # ─────────────────────────────────────────────────────────────
 #  SECTION 0: DATA GENERATION
@@ -555,10 +671,9 @@ def train_autoencoder(Xa, gt):
 #  FULL PIPELINE
 # ─────────────────────────────────────────────────────────────
 
-def run_pipeline(n=5000, force=False):
-    print("\n╔════════════════════════════════════╗")
-    print("║  Telecom Intelligence Pipeline v2  ║")
-    print("╚════════════════════════════════════╝")
+def _train_pipeline(n=5000, force=False):
+    # Avoid Unicode box-drawing chars (can fail on cp1252 consoles)
+    print("\n== Telecom Intelligence Pipeline v2 ==")
 
     if os.path.exists(DATA_RAW) and not force:
         print("[0] Loading existing dataset…")
@@ -577,10 +692,13 @@ def run_pipeline(n=5000, force=False):
     print("[3] Anomaly Detection…")
     r3 = train_anomaly_module(df); df = r3['df']
 
-    df.to_csv(DATA_RICH, index=False)
-    print(f"\n✓ Enriched dataset saved ({df.shape[1]} cols)")
-    print("✓ All models serialised to models/")
+    print("All models serialized to models/")
     return df, r1, r2, r3
+
+
+# Backwards-compatible name (used by older code / scripts)
+def run_pipeline(n=5000, force=False):
+    return get_pipeline(n=n, force=force)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -609,7 +727,7 @@ def predict_anomaly(inputs: dict):
 
 if __name__ == '__main__':
     df, r1, r2, r3 = run_pipeline(n=5000, force=True)
-    print(f"\nBest regressor : {r1['best_name']}  R²={r1['reg_res'][r1['best_name']]['r2']}")
+    print(f"\nBest regressor : {r1['best_name']}  R2={r1['reg_res'][r1['best_name']]['r2']}")
     print(f"LSTM RMSE      : {r1['lstm_res']['rmse']}")
     print(f"Churn F1       : {r2['churn_metrics']['f1']}")
     print(f"ISO F1         : {r3['metrics']['Isolation Forest']['f1']}")

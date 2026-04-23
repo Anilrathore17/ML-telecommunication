@@ -505,7 +505,10 @@ elif "Behaviour" in page:
             st.plotly_chart(fig, use_container_width=True)
 
         from ml_engine import CHURN_FEATS
-        fi = dict(zip(CHURN_FEATS, r2['churn_rf'].feature_importances_))
+        if 'churn_feat_imp' in r2:
+            fi = r2['churn_feat_imp']
+        else:
+            fi = dict(zip(CHURN_FEATS, r2['churn_rf'].feature_importances_))
         fi_df = pd.DataFrame({'Feature':list(fi.keys()),
                                'Importance':list(fi.values())}).sort_values('Importance')
         fig = px.bar(fi_df, x='Importance', y='Feature', orientation='h',

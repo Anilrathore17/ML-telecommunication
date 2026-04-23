@@ -124,6 +124,8 @@ def _strip_training_objects(r1: dict, r2: dict, r3: dict):
     r2.pop('churn_rf', None)
     r2.pop('km_user', None)
     r2.pop('df', None)
+    if 'churn_feat_imp' in r2 and isinstance(r2['churn_feat_imp'], dict):
+        r2['churn_feat_imp'] = {str(k): float(v) for k, v in r2['churn_feat_imp'].items()}
     if 'seg_summary' in r2:
         r2['seg_summary'] = _df_to_records(r2['seg_summary'])
     if 'peak_usage' in r2:
@@ -507,6 +509,7 @@ def train_behaviour_module(df):
     churn_rf.fit(Xct, yct)
     ycp   = churn_rf.predict(Xce)
     cv    = cross_val_score(churn_rf,Xc,yc,cv=5,scoring='accuracy').mean()
+    churn_feat_imp = dict(zip(CHURN_FEATS, churn_rf.feature_importances_.round(6)))
     churn_metrics = {
         'accuracy':  round((ycp==yce).mean(),4),
         'cv_acc':    round(cv,4),
@@ -546,6 +549,7 @@ def train_behaviour_module(df):
     return {
         'km_user': km_user, 'best_k': best_k, 'sil_km': sil_km,
         'churn_rf': churn_rf, 'churn_metrics': churn_metrics,
+        'churn_feat_imp': churn_feat_imp,
         'seg_summary': seg_summary, 'pca_var': pca_var,
         'peak_usage': peak, 'df': df,
     }
